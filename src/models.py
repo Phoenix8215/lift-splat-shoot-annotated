@@ -211,6 +211,7 @@ class LiftSplatShoot(nn.Module):
         x = x.reshape(Nprime, C)  # 将图像展平，一共有 B*N*D*H*W 个点
 
         # flatten indices
+        # 将连续的自车坐标系点，映射到离散的 BEV 网格坐标索引上。
         geom_feats = ((geom_feats - (self.bx - self.dx/2.)) / self.dx).long()  # 将[-50,50] [-10 10]的范围平移到[0,100] [0,20]，计算栅格坐标并取整
         geom_feats = geom_feats.view(Nprime, 3)  # 将像素映射关系同样展平  geom_feats: B*N*D*H*W x 3 (173184 x 3)
         batch_ix = torch.cat([torch.full([Nprime//B, 1], ix,

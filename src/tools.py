@@ -195,21 +195,52 @@ def cumsum_trick(x, geom_feats, ranks):
 class QuickCumsum(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, geom_feats, ranks):
-        # x: 168648 x 64  geom_feats: 168648 x 4  ranks: 168648 x
-        x = x.cumsum(0) # 求前缀和  x: 168648 x 64
-        kept = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)  # kept: 168648 x
-        kept[:-1] = (ranks[1:] != ranks[:-1])  # 筛选出ranks中前后rank值不相等的位置
-
-        x, geom_feats = x[kept], geom_feats[kept]  # rank值相等的点只留下最后一个，即一个batch中的一个格子里只留最后一个点 x: 29072  geom_feats: 29072 x 4
-        x = torch.cat((x[:1], x[1:] - x[:-1]))  # x后一个减前一个，还原到cumsum之前的x，此时的一个点是之前与其rank相等的点的feature的和，相当于把同一个格子的点特征进行了sum
-
-        # save kept for backward
+        # x: shape (num_points, C), 例如 168648 x 64
+        # geom_feats: shape (num_points, 4)
+        # ranks: shape (num_points,), 例如 168648
+        
+        # 1) 前缀和
+        x = x.cumsum(0)  # 沿第一维(行)做累加, x变成前缀和
+        
+        # 2) 找出要保留哪些行(哪些点)
+        kept = torch.ones(x.shape[0], device=x.device, dtype=torch.bool)
+        # 表达式 (ranks[1:] != ranks[:-1]) 的长度是 x.shape[0] - 1（因为比较了相邻元素，共会产生 168647 个布尔值）。
+        # 因此只能把 (ranks[1:] != ranks[:-1]) 赋给 kept[:-1]（它的长度同样是 x.shape[0] - 1），从而避免形状不匹配。
+        kept[:-1] = (ranks[1:] != ranks[:-1])
+        # 这行逻辑：只要后一个rank != 前一个rank，就保留前一个位置
+        #         如果 ranks[i] == ranks[i+1]，说明它们属于同一个体素，暂时先丢弃前面那个，直到最后一个
+        #
+        # 总结：kept 数组里True的位置，正好是新的rank开始或者是最后一个元素。
+        #       这样就只留下 "每个rank的最后一个" 索引。
+        
+        x, geom_feats = x[kept], geom_feats[kept]
+        # 这样，就把相同rank那一大堆的前缀和中的“最后一个”位置拿出来。
+        # x 的 shape 会从 (168648,64) 变成更小，如 (29072,64)
+        
+        # 3) 差分得到"体素内的特征和"
+        #    现在的 x 是“前缀和里保留下来的点”，依次对应不同 rank(或者 rank 边界)的前缀和值
+        #    x[:1] 即保留第一行本身(因为它没有前驱行)
+        #    x[1:] - x[:-1] 就是前缀和相邻之差, 相当于把同一 rank 下所有元素加在一起的结果
+        x = torch.cat((x[:1], x[1:] - x[:-1]))
+        # 这里举个简单例子：
+        #   原始 x.cumsum(0) = [a1, a1+a2, a1+a2+a3, a1+a2+a3+a4, ...]
+        #   假设 a1,a2,a3 都同一个 rank, a4 下一个 rank
+        #   kept 会把 a3 的那个位置和 a4 的位置都保留下来(因为 rank 从 a3 到 a4 变化了)
+        #   那么 kept 后 x 里就可能是 [a1+a2+a3, a1+a2+a3+a4, ...]
+        #   再做 x[1:] - x[:-1] = [(a1+a2+a3+a4) - (a1+a2+a3), ...] = [a4, ...]
+        #   这样就得到了"同一 rank"内所有元素(前缀和的差分)。
+        #
+        #   最前面再 cat 一个 x[:1]，是为了保留第一个位置(它没有前驱可差分)。
+        #   这个第一个位置实际就是 rank[0] 这一批点的 sum。 
+        
+        # 4) 保存 kept，用于 backward 恢复梯度的映射方式
         ctx.save_for_backward(kept)
-
-        # no gradient for geom_feats
+        
+        # 5) geom_feats 在后续不需要梯度
         ctx.mark_non_differentiable(geom_feats)
-
+        
         return x, geom_feats
+
 
     @staticmethod
     def backward(ctx, gradx, gradgeom):

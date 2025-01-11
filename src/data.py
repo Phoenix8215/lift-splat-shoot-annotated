@@ -177,7 +177,7 @@ class NuscData(torch.utils.data.Dataset):
         return torch.Tensor(pts)[:3]  # x,y,z
 
     def get_binimg(self, rec):
-
+        # get_binimg 获取的是“鸟瞰图平面上车辆目标的二值占用图”，用于表示自车周围哪些网格处是车辆，哪些网格处为空。
         # 得到自车坐标系相对于地图全局坐标系的位姿
         egopose = self.nusc.get('ego_pose',
                                 self.nusc.get('sample_data', rec['data']['LIDAR_TOP'])['ego_pose_token'])
